@@ -1,4 +1,4 @@
-# BizBooks - Small Business Accounting System
+# Axsan - Small Business Accounting System
 
 A complete, integrated small business accounting system built with React and Tailwind CSS.
 
