@@ -1,7 +1,13 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#1e3a5f">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BizBooks - Small Business Accounting</title>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -16,6 +22,23 @@
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background:#f3f4f6; }
         .fade-in { animation: fadeIn 0.3s ease-in; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    
+        /* Mobile Optimizations */
+        input, select, textarea { font-size: 16px; -webkit-appearance: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @media (max-width: 768px) {
+            .sidebar-desktop { display: none !important; }
+            .main-content { padding: 1rem !important; max-width: 100% !important; }
+        }
+        @media (min-width: 769px) {
+            .sidebar-mobile { display: none !important; }
+        }
+        /* Prevent text selection on buttons */
+        button { user-select: none; -webkit-user-select: none; }
+        /* Smooth scrolling */
+        html { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
+
     </style>
 </head>
 <body>
@@ -25,7 +48,7 @@
         const { useState, useEffect, useReducer, useContext, createContext, useRef } = React;
 
         // ==================== COMPANY / CONSTANTS ====================
-       const COMPANY = { name: 'Axsan Inc.', address: 'bakaaro howlwadaag', phone: '615200348', email: 'hello@axsan.com' };
+        const COMPANY = { name: 'BizBooks Inc.', address: '123 Business Ave, Suite 100', phone: '(555) 123-4567', email: 'hello@bizbooks.com' };
 
         // ==================== FIREBASE SETUP ====================
         // Replace these values with your own Firebase project config
@@ -40,14 +63,122 @@
 			measurementId: "G-CD512FY4DS"
         };
         firebase.initializeApp(FIREBASE_CONFIG);
-        const auth = firebase.auth();
-        const db = firebase.firestore();
+        
+        // ==================== OFFLINE STORAGE ====================
+        const OFFLINE_STORAGE = {
+            get: (key) => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } },
+            set: (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { console.warn('Storage full'); } },
+            remove: (key) => localStorage.removeItem(key),
+        };
+        const isFirebaseAvailable = typeof firebase !== 'undefined';
+
+        const auth = isFirebaseAvailable ? firebase.auth() : null;
+        const db = isFirebaseAvailable ? firebase.firestore() : null;
 
         const PLAN_LIMITS = {
             trial: { label: 'Trial', maxProducts: 25, maxInvoicesPerMonth: 20 },
             basic: { label: 'Basic', maxProducts: 200, maxInvoicesPerMonth: 300 },
             pro: { label: 'Pro', maxProducts: 100000, maxInvoicesPerMonth: 100000 },
         };
+
+const SUBSCRIPTION_TIERS = {
+    free: {
+        name: 'Free Trial',
+        price: 0,
+        durationDays: 14,
+        modules: ['dashboard'],
+        limits: { maxInvoices: 5, maxCustomers: 3, maxProducts: 10, maxTransactions: 20 }
+    },
+    cashbook: {
+        name: 'Cashbook Only',
+        price: 9.99,
+        durationDays: 30,
+        modules: ['dashboard', 'cashbook'],
+        limits: { maxInvoices: 0, maxCustomers: 0, maxProducts: 0, maxTransactions: 500 }
+    },
+    receivables: {
+        name: 'Receivables Only',
+        price: 14.99,
+        durationDays: 30,
+        modules: ['dashboard', 'receivables'],
+        limits: { maxInvoices: 100, maxCustomers: 50, maxProducts: 0, maxTransactions: 0 }
+    },
+    payables: {
+        name: 'Payables Only',
+        price: 14.99,
+        durationDays: 30,
+        modules: ['dashboard', 'payables'],
+        limits: { maxInvoices: 0, maxCustomers: 0, maxProducts: 0, maxTransactions: 0 }
+    },
+    inventory: {
+        name: 'Inventory Only',
+        price: 19.99,
+        durationDays: 30,
+        modules: ['dashboard', 'inventory'],
+        limits: { maxInvoices: 0, maxCustomers: 0, maxProducts: 500, maxTransactions: 0 }
+    },
+    basic: {
+        name: 'Basic (Cashbook + Receivables)',
+        price: 24.99,
+        durationDays: 30,
+        modules: ['dashboard', 'cashbook', 'receivables'],
+        limits: { maxInvoices: 300, maxCustomers: 100, maxProducts: 50, maxTransactions: 1000 }
+    },
+    standard: {
+        name: 'Standard (No Inventory)',
+        price: 34.99,
+        durationDays: 30,
+        modules: ['dashboard', 'cashbook', 'receivables', 'payables'],
+        limits: { maxInvoices: 1000, maxCustomers: 500, maxProducts: 0, maxTransactions: 5000 }
+    },
+    pro: {
+        name: 'Pro (Full Access)',
+        price: 49.99,
+        durationDays: 30,
+        modules: ['dashboard', 'cashbook', 'receivables', 'payables', 'inventory', 'admin'],
+        limits: { maxInvoices: 100000, maxCustomers: 100000, maxProducts: 100000, maxTransactions: 100000 }
+    }
+};
+
+const MODULE_NAMES = {
+    dashboard: 'Dashboard',
+    cashbook: 'Cash Book',
+    receivables: 'Accounts Receivable',
+    payables: 'Accounts Payable',
+    inventory: 'Inventory',
+    admin: 'Subscriptions'
+};
+
+// ==================== SUBSCRIPTION HELPERS ====================
+function hasModuleAccess(userSubscription, moduleId) {
+    if (!userSubscription || !userSubscription.tier) return moduleId === 'dashboard';
+    const tier = SUBSCRIPTION_TIERS[userSubscription.tier];
+    if (!tier) return moduleId === 'dashboard';
+    if (userSubscription.status !== 'active' && userSubscription.status !== 'trial') return false;
+    if (isSubscriptionExpired(userSubscription)) return moduleId === 'dashboard';
+    return tier.modules.includes(moduleId);
+}
+
+function isSubscriptionExpired(sub) {
+    if (!sub || !sub.expiresAt) return true;
+    return new Date() > new Date(sub.expiresAt);
+}
+
+function getDaysRemaining(sub) {
+    if (!sub || !sub.expiresAt) return 0;
+    const diff = new Date(sub.expiresAt) - new Date();
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+}
+
+function checkLimit(userSubscription, limitType, currentCount) {
+    if (!userSubscription || !userSubscription.tier) return false;
+    const tier = SUBSCRIPTION_TIERS[userSubscription.tier];
+    if (!tier) return false;
+    const limit = tier.limits[limitType];
+    if (limit === undefined || limit === 0) return true;
+    return currentCount < limit;
+}
+
 
         // ==================== AUTH CONTEXT ====================
         const AuthContext = createContext();
@@ -59,13 +190,40 @@
             const [userDoc, setUserDoc] = useState(null);
             const [company, setCompany] = useState(null);
             const [authError, setAuthError] = useState('');
+            const [userSubscription, setUserSubscription] = useState(null);
+            const [isOffline, setIsOffline] = useState(!isFirebaseAvailable);
 
             useEffect(() => {
+                // Check for offline session first
+                const offlineSession = OFFLINE_STORAGE.get('bizbooks_offline_session');
+                if (offlineSession) {
+                    setUserDoc(offlineSession.userDoc);
+                    setCompany(offlineSession.company);
+                    setAuthLoading(false);
+                    return;
+                }
+                if (!auth) { setAuthLoading(false); return; }
                 const unsub = auth.onAuthStateChanged(async (fbUser) => {
                     setAuthError('');
                     if (!fbUser) {
                         setFirebaseUser(null); setUserDoc(null); setCompany(null); setAuthLoading(false);
                         return;
+                        // Load subscription
+                        const sub = OFFLINE_STORAGE.get('bizbooks_subscription_' + offlineSession.userDoc.companyId);
+                        if (sub) setUserSubscription(sub);
+                        else {
+                            // Auto-assign free trial for new users
+                            const trialSub = {
+                                tier: 'free',
+                                status: 'trial',
+                                startedAt: new Date().toISOString(),
+                                expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+                                paymentMethod: 'TRIAL',
+                                autoRenew: false
+                            };
+                            setUserSubscription(trialSub);
+                            OFFLINE_STORAGE.set('bizbooks_subscription_' + offlineSession.userDoc.companyId, trialSub);
+                        }
                     }
                     setFirebaseUser(fbUser);
                     try {
@@ -87,6 +245,17 @@
 
             const signup = async (email, password, companyName, ownerName) => {
                 setAuthError('');
+                if (!auth) {
+                    // Offline signup
+                    const sessionId = 'OFFLINE_' + Date.now();
+                    const companyData = { id: sessionId, name: companyName, ownerUid: sessionId, ownerEmail: email, plan: 'trial', status: 'active', createdAt: new Date().toISOString() };
+                    const userData = { email, name: ownerName || '', companyId: sessionId, role: 'owner', isSuperAdmin: false };
+                    OFFLINE_STORAGE.set('bizbooks_offline_session', { userDoc: userData, company: companyData });
+                    setUserDoc(userData);
+                    setCompany(companyData);
+                    setIsOffline(true);
+                    return;
+                }
                 const cred = await auth.createUserWithEmailAndPassword(email, password);
                 const companyRef = db.collection('companies').doc();
                 await companyRef.set({
@@ -101,20 +270,35 @@
 
             const login = async (email, password) => {
                 setAuthError('');
+                if (!auth) {
+                    const offlineSession = OFFLINE_STORAGE.get('bizbooks_offline_session');
+                    if (offlineSession && offlineSession.userDoc.email === email) {
+                        setUserDoc(offlineSession.userDoc);
+                        setCompany(offlineSession.company);
+                        setIsOffline(true);
+                        return;
+                    }
+                    setAuthError('Offline mode: Account not found. Please sign up first.');
+                    return;
+                }
                 await auth.signInWithEmailAndPassword(email, password);
             };
 
-            const logout = () => auth.signOut();
+            const logout = () => {
+                OFFLINE_STORAGE.remove('bizbooks_offline_session');
+                if (auth) auth.signOut();
+                setFirebaseUser(null); setUserDoc(null); setCompany(null);
+            };
 
             return (
-                <AuthContext.Provider value={{ authLoading, firebaseUser, userDoc, company, authError, setAuthError, signup, login, logout }}>
+                <AuthContext.Provider value={{ authLoading, firebaseUser, userDoc, company, authError, setAuthError, signup, login, logout, isOffline, userSubscription, setUserSubscription }}>
                     {children}
                 </AuthContext.Provider>
             );
         }
 
         function LoginSignup() {
-            const { login, signup, authError, setAuthError } = useAuth();
+            const { login, signup, authError, setAuthError, isOffline } = useAuth();
             const [mode, setMode] = useState('login');
             const [form, setForm] = useState({ email: '', password: '', companyName: '', ownerName: '' });
             const [submitting, setSubmitting] = useState(false);
@@ -140,6 +324,7 @@
                     <div className="bg-white rounded-lg shadow p-8 w-full max-w-md">
                         <h2 className="text-2xl font-bold text-gray-900 mb-1">📚 BizBooks</h2>
                         <p className="text-sm text-gray-500 mb-6">{mode === 'login' ? 'Log in to your account' : 'Create your business account'}</p>
+                        {isOffline && <div className="mb-4 p-3 bg-blue-50 text-blue-700 text-sm rounded-lg">📴 Offline Mode — Your data is stored locally on this device.</div>}
                         {authError && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{authError}</div>}
                         <form onSubmit={handleSubmit} className="space-y-4">
                             {mode === 'signup' && (
@@ -636,29 +821,42 @@
             const [loaded, setLoaded] = useState(false);
             const skipNextSave = useRef(false);
 
-            // Load this company's data from Firestore on mount / when companyId changes
             useEffect(() => {
                 let cancelled = false;
                 setLoaded(false);
+                const loadFromLocal = () => {
+                    const saved = OFFLINE_STORAGE.get(STORAGE_KEY + '_' + companyId);
+                    if (saved && isValidState(saved)) {
+                        skipNextSave.current = true;
+                        dispatch({ type: ACTIONS.RESET_DATA, payload: saved });
+                    }
+                    setLoaded(true);
+                };
+                if (!db || !companyId || (companyId && companyId.startsWith && companyId.startsWith('OFFLINE_'))) {
+                    loadFromLocal();
+                    return;
+                }
                 db.collection('companies').doc(companyId).collection('data').doc('state').get()
                     .then(snap => {
                         if (cancelled) return;
                         if (snap.exists && isValidState(snap.data())) {
                             skipNextSave.current = true;
                             dispatch({ type: ACTIONS.RESET_DATA, payload: snap.data() });
+                            OFFLINE_STORAGE.set(STORAGE_KEY + '_' + companyId, snap.data());
                         }
                         setLoaded(true);
                     })
-                    .catch(() => { if (!cancelled) setLoaded(true); });
+                    .catch(() => { if (!cancelled) { loadFromLocal(); } });
                 return () => { cancelled = true; };
             }, [companyId]);
 
-            // Persist to Firestore whenever state changes (skip the very first load)
             useEffect(() => {
                 if (!loaded) return;
                 if (skipNextSave.current) { skipNextSave.current = false; return; }
-                db.collection('companies').doc(companyId).collection('data').doc('state').set(state)
-                    .catch(() => {});
+                OFFLINE_STORAGE.set(STORAGE_KEY + '_' + companyId, state);
+                if (db && companyId && !(companyId.startsWith && companyId.startsWith('OFFLINE_'))) {
+                    db.collection('companies').doc(companyId).collection('data').doc('state').set(state).catch(() => {});
+                }
             }, [state, loaded, companyId]);
 
             useEffect(() => { if (loaded) dispatch({ type: ACTIONS.UPDATE_OVERDUE_STATUS }); }, [loaded]);
@@ -730,6 +928,11 @@
                 <head>
                 <title>${title} - ${COMPANY.name}</title>
                 <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#1e3a5f">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
                 <style>
                     * { margin:0; padding:0; box-sizing:border-box; }
                     body { font-family: Georgia, 'Times New Roman', serif; color:#1f2937; padding: 40px; font-size: 13px; }
@@ -757,7 +960,24 @@
                     .meta-block p { font-size:13px; line-height:1.5; }
                     .footer-note { margin-top: 40px; font-size:11px; color:#9ca3af; text-align:center; border-top:1px solid #e5e7eb; padding-top:12px; }
                     @media print { body { padding: 20px; } }
-                </style>
+                
+        /* Mobile Optimizations */
+        input, select, textarea { font-size: 16px; -webkit-appearance: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @media (max-width: 768px) {
+            .sidebar-desktop { display: none !important; }
+            .main-content { padding: 1rem !important; max-width: 100% !important; }
+        }
+        @media (min-width: 769px) {
+            .sidebar-mobile { display: none !important; }
+        }
+        /* Prevent text selection on buttons */
+        button { user-select: none; -webkit-user-select: none; }
+        /* Smooth scrolling */
+        html { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
+
+    </style>
                 </head>
                 <body>
                     <div class="doc-header">
@@ -1156,22 +1376,35 @@
         }
 
         function Sidebar({ activePage, setActivePage }) {
-            const { userDoc, company, logout } = useAuth();
-            const navItems = [
+            const { userDoc, company, logout, userSubscription } = useAuth();
+            const allNavItems = [
                 { id: 'dashboard', label: 'Dashboard', icon: '📊' },
                 { id: 'cashbook', label: 'Cash Book', icon: '💵' },
                 { id: 'receivables', label: 'Receivables', icon: '📥' },
                 { id: 'payables', label: 'Payables', icon: '📤' },
                 { id: 'inventory', label: 'Inventory', icon: '📦' },
             ];
-            if (userDoc && userDoc.isSuperAdmin) {
-                navItems.push({ id: 'admin', label: 'Customer Accounts', icon: '🛠️' });
+
+            // Filter nav items based on subscription
+            const navItems = allNavItems.filter(item => hasModuleAccess(userSubscription, item.id));
+
+            // Add admin panel if user has access
+            if (userDoc && (userDoc.isSuperAdmin || hasModuleAccess(userSubscription, 'admin'))) {
+                navItems.push({ id: 'admin', label: 'Subscriptions', icon: '💎' });
             }
+
             return (
                 <div className="w-64 bg-white border-r min-h-screen flex-shrink-0 flex flex-col">
                     <div className="p-6 border-b">
                         <h2 className="text-xl font-bold text-gray-900">📚 BizBooks</h2>
                         <p className="text-xs text-gray-500 mt-1">{company ? company.name : 'Small Business Accounting'}</p>
+                        {userSubscription && (
+                            <div className="mt-2 px-2 py-1 bg-blue-50 rounded text-xs text-blue-700">
+                                {SUBSCRIPTION_TIERS[userSubscription.tier]?.name}
+                                {' • '}
+                                {getDaysRemaining(userSubscription)} days left
+                            </div>
+                        )}
                     </div>
                     <nav className="p-4 space-y-1 flex-1">
                         {navItems.map(item => (
@@ -2385,12 +2618,315 @@
         }
 
         // ==================== APP ====================
-        function AppContent() {
+        
+        // ==================== UPGRADE PROMPT ====================
+        function UpgradePrompt({ requiredModule, currentTier }) {
+            const tier = SUBSCRIPTION_TIERS[currentTier] || SUBSCRIPTION_TIERS.free;
+            const requiredTier = Object.entries(SUBSCRIPTION_TIERS).find(([k, v]) => 
+                v.modules.includes(requiredModule) && v.price > 0
+            );
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+                    <div className="bg-white rounded-lg shadow p-8 w-full max-w-md text-center">
+                        <div className="text-6xl mb-4">🔒</div>
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">Module Locked</h2>
+                        <p className="text-gray-500 mb-4">
+                            Your current plan <strong>{tier.name}</strong> does not include 
+                            <strong> {MODULE_NAMES[requiredModule]}</strong>.
+                        </p>
+                        <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                            <p className="text-sm text-gray-600">Your current modules:</p>
+                            <p className="font-medium">{tier.modules.map(m => MODULE_NAMES[m]).join(', ')}</p>
+                        </div>
+                        {requiredTier && (
+                            <div className="space-y-2">
+                                <p className="text-sm text-gray-500">Upgrade to unlock:</p>
+                                <div className="border rounded-lg p-4">
+                                    <h3 className="font-bold">{requiredTier[1].name}</h3>
+                                    <p className="text-2xl font-bold text-blue-600">${requiredTier[1].price}<span className="text-sm font-normal">/mo</span></p>
+                                    <p className="text-sm text-gray-500">Includes: {requiredTier[1].modules.map(m => MODULE_NAMES[m]).join(', ')}</p>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-2">Contact your account manager to upgrade</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==================== SUBSCRIPTION MANAGER (ADMIN) ====================
+        function SubscriptionManager() {
+            const [customers, setCustomers] = useState([]);
+            const [selectedCustomer, setSelectedCustomer] = useState(null);
+            const [showAssignModal, setShowAssignModal] = useState(false);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [revenue, setRevenue] = useState({ total: 0, monthly: 0, active: 0, expired: 0 });
+
+            useEffect(() => {
+                loadCustomers();
+            }, []);
+
+            const loadCustomers = () => {
+                const saved = localStorage.getItem('bizbooks_customers_subscriptions');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    setCustomers(data);
+                    calculateRevenue(data);
+                }
+            };
+
+            const calculateRevenue = (data) => {
+                const total = data.reduce((sum, c) => sum + (c.totalPaid || 0), 0);
+                const monthly = data.reduce((sum, c) => {
+                    const tier = SUBSCRIPTION_TIERS[c.subscription?.tier];
+                    return sum + (tier ? tier.price : 0);
+                }, 0);
+                const active = data.filter(c => c.subscription?.status === 'active' && !isSubscriptionExpired(c.subscription)).length;
+                const expired = data.filter(c => isSubscriptionExpired(c.subscription)).length;
+                setRevenue({ total, monthly, active, expired });
+            };
+
+            const assignSubscription = (customerId, tierKey) => {
+                const tier = SUBSCRIPTION_TIERS[tierKey];
+                const now = new Date();
+                const expiresAt = new Date(now.getTime() + tier.durationDays * 24 * 60 * 60 * 1000);
+
+                const updated = customers.map(c => {
+                    if (c.id === customerId) {
+                        return {
+                            ...c,
+                            subscription: {
+                                tier: tierKey,
+                                status: tierKey === 'free' ? 'trial' : 'active',
+                                startedAt: now.toISOString(),
+                                expiresAt: expiresAt.toISOString(),
+                                paymentMethod: 'MANUAL',
+                                autoRenew: false
+                            },
+                            totalPaid: (c.totalPaid || 0) + tier.price
+                        };
+                    }
+                    return c;
+                });
+
+                setCustomers(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
+                calculateRevenue(updated);
+                setShowAssignModal(false);
+            };
+
+            const extendSubscription = (customerId, extraDays) => {
+                const updated = customers.map(c => {
+                    if (c.id === customerId && c.subscription) {
+                        const currentExpiry = new Date(c.subscription.expiresAt);
+                        const newExpiry = new Date(currentExpiry.getTime() + extraDays * 24 * 60 * 60 * 1000);
+                        return {
+                            ...c,
+                            subscription: {
+                                ...c.subscription,
+                                expiresAt: newExpiry.toISOString(),
+                                status: 'active'
+                            }
+                        };
+                    }
+                    return c;
+                });
+                setCustomers(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
+            };
+
+            const revokeAccess = (customerId) => {
+                const updated = customers.map(c => {
+                    if (c.id === customerId) {
+                        return { ...c, subscription: { ...c.subscription, status: 'suspended' } };
+                    }
+                    return c;
+                });
+                setCustomers(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
+            };
+
+            const addCustomer = (customerData) => {
+                const newCustomer = {
+                    id: 'CUST-' + Date.now(),
+                    ...customerData,
+                    subscription: {
+                        tier: 'free',
+                        status: 'trial',
+                        startedAt: new Date().toISOString(),
+                        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+                        paymentMethod: 'TRIAL',
+                        autoRenew: false
+                    },
+                    totalPaid: 0
+                };
+                const updated = [...customers, newCustomer];
+                setCustomers(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
+                calculateRevenue(updated);
+            };
+
+            const filtered = customers.filter(c => 
+                c.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                c.email?.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            return (
+                <div className="space-y-6 fade-in">
+                    <h1 className="text-3xl font-bold text-gray-900">Subscription Management</h1>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <p className="text-sm text-gray-500">Total Revenue</p>
+                            <p className="text-2xl font-bold text-green-600">{formatCurrency(revenue.total)}</p>
+                        </div>
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <p className="text-sm text-gray-500">Monthly Recurring</p>
+                            <p className="text-2xl font-bold text-blue-600">{formatCurrency(revenue.monthly)}</p>
+                        </div>
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <p className="text-sm text-gray-500">Active Subscriptions</p>
+                            <p className="text-2xl font-bold text-gray-900">{revenue.active}</p>
+                        </div>
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <p className="text-sm text-gray-500">Expired / Suspended</p>
+                            <p className="text-2xl font-bold text-red-600">{revenue.expired}</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-lg shadow p-6">
+                        <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                            <h3 className="text-lg font-semibold">Customer Subscriptions</h3>
+                            <input type="text" placeholder="Search customers..." className="border rounded-lg px-3 py-2"
+                                value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Customer</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Plan</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Status</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Expires</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Paid</th>
+                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filtered.length === 0 && (
+                                        <tr><td colSpan="6" className="px-4 py-4 text-center text-sm text-gray-400">No customers yet</td></tr>
+                                    )}
+                                    {filtered.map(customer => (
+                                        <tr key={customer.id} className="border-t hover:bg-gray-50">
+                                            <td className="px-4 py-3">
+                                                <div className="font-medium">{customer.name}</div>
+                                                <div className="text-sm text-gray-500">{customer.email}</div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                {customer.subscription ? (
+                                                    <span className="font-medium">{SUBSCRIPTION_TIERS[customer.subscription.tier]?.name || 'Unknown'}</span>
+                                                ) : (<span className="text-gray-400">No plan</span>)}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                {customer.subscription ? (
+                                                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                        customer.subscription.status === 'active' && !isSubscriptionExpired(customer.subscription)
+                                                            ? 'bg-green-100 text-green-800'
+                                                            : customer.subscription.status === 'trial'
+                                                            ? 'bg-blue-100 text-blue-800'
+                                                            : 'bg-red-100 text-red-800'
+                                                    }`}>
+                                                        {isSubscriptionExpired(customer.subscription) ? 'EXPIRED' : customer.subscription.status.toUpperCase()}
+                                                    </span>
+                                                ) : (<span className="px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-800">NO PLAN</span>)}
+                                            </td>
+                                            <td className="px-4 py-3 text-sm">
+                                                {customer.subscription ? (
+                                                    <span className={isSubscriptionExpired(customer.subscription) ? 'text-red-600 font-medium' : ''}>
+                                                        {getDaysRemaining(customer.subscription)} days
+                                                    </span>
+                                                ) : '—'}
+                                            </td>
+                                            <td className="px-4 py-3 text-sm font-medium">{formatCurrency(customer.totalPaid || 0)}</td>
+                                            <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
+                                                <button onClick={() => { setSelectedCustomer(customer); setShowAssignModal(true); }}
+                                                    className="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                                    {customer.subscription?.tier !== 'free' ? 'Change' : 'Assign'}
+                                                </button>
+                                                {customer.subscription?.status === 'active' && (
+                                                    <button onClick={() => revokeAccess(customer.id)}
+                                                        className="text-red-600 hover:text-red-800 text-sm font-medium">Revoke</button>
+                                                )}
+                                                {!isSubscriptionExpired(customer.subscription) && customer.subscription?.status !== 'suspended' && (
+                                                    <button onClick={() => extendSubscription(customer.id, 30)}
+                                                        className="text-green-600 hover:text-green-800 text-sm font-medium">+30d</button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-lg shadow p-6">
+                        <h3 className="text-lg font-semibold mb-4">Pricing Plans</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {Object.entries(SUBSCRIPTION_TIERS).map(([key, tier]) => (
+                                <div key={key} className="border rounded-lg p-4">
+                                    <h4 className="font-bold text-gray-900">{tier.name}</h4>
+                                    <p className="text-2xl font-bold text-blue-600 mt-2">
+                                        {tier.price === 0 ? 'FREE' : formatCurrency(tier.price)}
+                                        <span className="text-sm font-normal text-gray-500">/mo</span>
+                                    </p>
+                                    <ul className="mt-3 space-y-1 text-sm">
+                                        {tier.modules.map(m => (
+                                            <li key={m} className="flex items-center gap-2"><span className="text-green-500">✓</span>{MODULE_NAMES[m]}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {showAssignModal && selectedCustomer && (
+                        <Modal isOpen={true} onClose={() => setShowAssignModal(false)} title={`Assign Plan - ${selectedCustomer.name}`}>
+                            <div className="space-y-3">
+                                <p className="text-sm text-gray-500">Select a plan for this customer:</p>
+                                {Object.entries(SUBSCRIPTION_TIERS).map(([key, tier]) => (
+                                    <div key={key} className="border rounded-lg p-4 hover:bg-gray-50 cursor-pointer"
+                                        onClick={() => assignSubscription(selectedCustomer.id, key)}>
+                                        <div className="flex justify-between items-center">
+                                            <div>
+                                                <h4 className="font-bold">{tier.name}</h4>
+                                                <p className="text-sm text-gray-500">{tier.modules.map(m => MODULE_NAMES[m]).join(', ')}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-xl font-bold text-blue-600">{tier.price === 0 ? 'FREE' : formatCurrency(tier.price)}</p>
+                                                <p className="text-xs text-gray-500">{tier.durationDays} days</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </Modal>
+                    )}
+                </div>
+            );
+        }
+
+function AppContent() {
             const { userDoc } = useAuth();
             const [activePage, setActivePage] = useState('dashboard');
-            const pages = { dashboard: Dashboard, cashbook: Cashbook, receivables: Receivables, payables: Payables, inventory: Inventory, admin: SuperAdminPanel };
-            const allowedAdmin = activePage === 'admin' && userDoc && userDoc.isSuperAdmin;
-            const ActivePage = allowedAdmin ? SuperAdminPanel : (pages[activePage] || Dashboard);
+            const pages = { dashboard: Dashboard, cashbook: Cashbook, receivables: Receivables, payables: Payables, inventory: Inventory, admin: SubscriptionManager };
+            const { userSubscription } = useAuth();
+            const allowedAdmin = activePage === 'admin' && (userDoc?.isSuperAdmin || hasModuleAccess(userSubscription, 'admin'));
+
+            // Check if user has access to the requested page
+            const hasAccess = activePage === 'dashboard' || hasModuleAccess(userSubscription, activePage);
+            const ActivePage = !hasAccess ? () => React.createElement(UpgradePrompt, { requiredModule: activePage, currentTier: userSubscription?.tier }) 
+                : (allowedAdmin ? SubscriptionManager : (pages[activePage] || Dashboard));
 
             return (
                 <div className="flex min-h-screen bg-gray-100">
