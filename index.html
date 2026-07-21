@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -198,7 +199,6 @@ function checkLimit(userSubscription, limitType, currentCount) {
                 if (offlineSession) {
                     setUserDoc(offlineSession.userDoc);
                     setCompany(offlineSession.company);
-                    setUserSubscription(offlineSession.company?.subscription || null);
                     setAuthLoading(false);
                     return;
                 }
@@ -206,8 +206,24 @@ function checkLimit(userSubscription, limitType, currentCount) {
                 const unsub = auth.onAuthStateChanged(async (fbUser) => {
                     setAuthError('');
                     if (!fbUser) {
-                        setFirebaseUser(null); setUserDoc(null); setCompany(null); setUserSubscription(null); setAuthLoading(false);
+                        setFirebaseUser(null); setUserDoc(null); setCompany(null); setAuthLoading(false);
                         return;
+                        // Load subscription
+                        const sub = OFFLINE_STORAGE.get('bizbooks_subscription_' + offlineSession.userDoc.companyId);
+                        if (sub) setUserSubscription(sub);
+                        else {
+                            // Auto-assign free trial for new users
+                            const trialSub = {
+                                tier: 'free',
+                                status: 'trial',
+                                startedAt: new Date().toISOString(),
+                                expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+                                paymentMethod: 'TRIAL',
+                                autoRenew: false
+                            };
+                            setUserSubscription(trialSub);
+                            OFFLINE_STORAGE.set('bizbooks_subscription_' + offlineSession.userDoc.companyId, trialSub);
+                        }
                     }
                     setFirebaseUser(fbUser);
                     try {
@@ -216,29 +232,8 @@ function checkLimit(userSubscription, limitType, currentCount) {
                         const uData = uSnap.data();
                         setUserDoc(uData);
                         if (uData.companyId) {
-                            const companyRef = db.collection('companies').doc(uData.companyId);
-                            const cSnap = await companyRef.get();
-                            if (cSnap.exists) {
-                                const cData = cSnap.data();
-                                setCompany({ id: cSnap.id, ...cData });
-                                if (cData.subscription) {
-                                    setUserSubscription(cData.subscription);
-                                } else {
-                                    // Back-fill a free trial subscription for companies that don't have one yet
-                                    const trialSub = {
-                                        tier: 'free',
-                                        status: 'trial',
-                                        startedAt: new Date().toISOString(),
-                                        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-                                        paymentMethod: 'TRIAL',
-                                        autoRenew: false
-                                    };
-                                    setUserSubscription(trialSub);
-                                    await companyRef.update({ subscription: trialSub });
-                                }
-                            } else {
-                                setCompany(null);
-                            }
+                            const cSnap = await db.collection('companies').doc(uData.companyId).get();
+                            setCompany(cSnap.exists ? { id: cSnap.id, ...cSnap.data() } : null);
                         }
                     } catch (e) {
                         setAuthError('Failed to load account. Please refresh.');
@@ -253,32 +248,21 @@ function checkLimit(userSubscription, limitType, currentCount) {
                 if (!auth) {
                     // Offline signup
                     const sessionId = 'OFFLINE_' + Date.now();
-                    const trialSub = {
-                        tier: 'free', status: 'trial',
-                        startedAt: new Date().toISOString(),
-                        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-                        paymentMethod: 'TRIAL', autoRenew: false
-                    };
-                    const companyData = { id: sessionId, name: companyName, ownerUid: sessionId, ownerEmail: email, status: 'active', createdAt: new Date().toISOString(), subscription: trialSub };
-                    const userData = { email, name: ownerName || '', companyId: sessionId, role: 'owner', isSuperAdmin: false };
+                    const companyData = { id: sessionId, name: companyName, ownerUid: sessionId, ownerEmail: email, plan: 'trial', status: 'active', createdAt: new Date().toISOString() };
+                    const isFirstUser = !localStorage.getItem('bizbooks_admin_created');
+                    const userData = { email, name: ownerName || '', companyId: sessionId, role: 'owner', isSuperAdmin: isFirstUser };
+                    if (isFirstUser) localStorage.setItem('bizbooks_admin_created', 'true');
                     OFFLINE_STORAGE.set('bizbooks_offline_session', { userDoc: userData, company: companyData });
                     setUserDoc(userData);
                     setCompany(companyData);
-                    setUserSubscription(trialSub);
                     setIsOffline(true);
                     return;
                 }
                 const cred = await auth.createUserWithEmailAndPassword(email, password);
                 const companyRef = db.collection('companies').doc();
-                const trialSub = {
-                    tier: 'free', status: 'trial',
-                    startedAt: new Date().toISOString(),
-                    expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-                    paymentMethod: 'TRIAL', autoRenew: false
-                };
                 await companyRef.set({
                     name: companyName, ownerUid: cred.user.uid, ownerEmail: email,
-                    status: 'active', createdAt: new Date().toISOString(), subscription: trialSub,
+                    plan: 'trial', status: 'active', createdAt: new Date().toISOString(),
                 });
                 await db.collection('users').doc(cred.user.uid).set({
                     email, name: ownerName || '', companyId: companyRef.id, role: 'owner', isSuperAdmin: false,
@@ -369,7 +353,28 @@ function checkLimit(userSubscription, limitType, currentCount) {
                                 {submitting ? 'Please wait...' : mode === 'login' ? 'Log In' : 'Create Account'}
                             </button>
                         </form>
-                        <p className="text-sm text-gray-500 mt-4 text-center">
+                        
+                        <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
+                            <p className="text-xs text-yellow-800 font-medium">Admin Access</p>
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    const session = JSON.parse(localStorage.getItem('bizbooks_offline_session') || '{}');
+                                    if (session.userDoc) {
+                                        session.userDoc.isSuperAdmin = true;
+                                        session.userDoc.role = 'owner';
+                                        localStorage.setItem('bizbooks_offline_session', JSON.stringify(session));
+                                        alert('You are now admin! Please log out and log back in.');
+                                    } else {
+                                        alert('No account found. Please sign up first.');
+                                    }
+                                }}
+                                className="mt-1 text-xs text-yellow-700 underline hover:text-yellow-900"
+                            >
+                                Make this account Super Admin
+                            </button>
+                        </div>
+<p className="text-sm text-gray-500 mt-4 text-center">
                             {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
                             <button className="text-blue-600 font-medium" onClick={() => { setAuthError(''); setMode(mode === 'login' ? 'signup' : 'login'); }}>
                                 {mode === 'login' ? 'Sign up' : 'Log in'}
@@ -1306,6 +1311,89 @@ function checkLimit(userSubscription, limitType, currentCount) {
                     <div className="flex justify-end font-semibold pt-2 border-t">
                         <span>Total: {formatCurrency(grandTotal)}</span>
                     </div>
+                </div>
+            );
+        }
+
+        // ==================== SUPER ADMIN ====================
+        function SuperAdminPanel() {
+            const [companies, setCompanies] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [editing, setEditing] = useState(null);
+            const [editForm, setEditForm] = useState({ plan: 'trial', status: 'active' });
+
+            const loadCompanies = () => {
+                setLoading(true);
+                db.collection('companies').orderBy('createdAt', 'desc').get()
+                    .then(snap => setCompanies(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+                    .finally(() => setLoading(false));
+            };
+
+            useEffect(() => { loadCompanies(); }, []);
+
+            const openEdit = (c) => { setEditing(c); setEditForm({ plan: c.plan || 'trial', status: c.status || 'active' }); };
+
+            const saveEdit = async () => {
+                await db.collection('companies').doc(editing.id).update({ plan: editForm.plan, status: editForm.status });
+                setEditing(null);
+                loadCompanies();
+            };
+
+            return (
+                <div className="space-y-6 fade-in">
+                    <h1 className="text-3xl font-bold text-gray-900">Customer Accounts</h1>
+                    {loading ? <p className="text-gray-500">Loading...</p> : (
+                        <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto">
+                            <table className="w-full">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Business</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Owner Email</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                                        <th className="px-6 py-3"></th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200">
+                                    {companies.map(c => (
+                                        <tr key={c.id}>
+                                            <td className="px-6 py-3 text-sm font-medium">{c.name}</td>
+                                            <td className="px-6 py-3 text-sm text-gray-500">{c.ownerEmail}</td>
+                                            <td className="px-6 py-3 text-sm">{(PLAN_LIMITS[c.plan] || {}).label || c.plan}</td>
+                                            <td className="px-6 py-3 text-sm">
+                                                <span className={`px-2 py-1 rounded text-xs font-medium ${c.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{c.status}</span>
+                                            </td>
+                                            <td className="px-6 py-3 text-sm text-gray-500">{formatDate(c.createdAt)}</td>
+                                            <td className="px-6 py-3 text-sm">
+                                                <button onClick={() => openEdit(c)} className="text-blue-600 hover:text-blue-800 font-medium">Manage</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                    <Modal isOpen={!!editing} onClose={() => setEditing(null)} title={editing ? `Manage ${editing.name}` : ''}>
+                        {editing && (
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Plan</label>
+                                    <select className="w-full border rounded-lg px-3 py-2" value={editForm.plan} onChange={e => setEditForm({ ...editForm, plan: e.target.value })}>
+                                        {Object.entries(PLAN_LIMITS).map(([key, p]) => <option key={key} value={key}>{p.label}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Status</label>
+                                    <select className="w-full border rounded-lg px-3 py-2" value={editForm.status} onChange={e => setEditForm({ ...editForm, status: e.target.value })}>
+                                        <option value="active">Active</option>
+                                        <option value="suspended">Suspended</option>
+                                    </select>
+                                </div>
+                                <button onClick={saveEdit} className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save Changes</button>
+                            </div>
+                        )}
+                    </Modal>
                 </div>
             );
         }
@@ -2591,12 +2679,8 @@ function checkLimit(userSubscription, limitType, currentCount) {
         }
 
         // ==================== SUBSCRIPTION MANAGER (ADMIN) ====================
-        // Reads and writes real customer companies in Firestore (db.collection('companies')).
-        // Each company document's `subscription` field is the single source of truth that
-        // hasModuleAccess() checks, so changes made here take effect for that customer immediately.
         function SubscriptionManager() {
             const [customers, setCustomers] = useState([]);
-            const [loading, setLoading] = useState(true);
             const [selectedCustomer, setSelectedCustomer] = useState(null);
             const [showAssignModal, setShowAssignModal] = useState(false);
             const [searchTerm, setSearchTerm] = useState('');
@@ -2606,26 +2690,12 @@ function checkLimit(userSubscription, limitType, currentCount) {
                 loadCustomers();
             }, []);
 
-            const loadCustomers = async () => {
-                setLoading(true);
-                try {
-                    const snap = await db.collection('companies').orderBy('createdAt', 'desc').get();
-                    const data = snap.docs.map(d => {
-                        const c = d.data();
-                        return {
-                            id: d.id,
-                            name: c.name,
-                            email: c.ownerEmail,
-                            subscription: c.subscription || null,
-                            totalPaid: c.totalPaid || 0
-                        };
-                    });
+            const loadCustomers = () => {
+                const saved = localStorage.getItem('bizbooks_customers_subscriptions');
+                if (saved) {
+                    const data = JSON.parse(saved);
                     setCustomers(data);
                     calculateRevenue(data);
-                } catch (e) {
-                    console.error('Failed to load customers', e);
-                } finally {
-                    setLoading(false);
                 }
             };
 
@@ -2640,55 +2710,83 @@ function checkLimit(userSubscription, limitType, currentCount) {
                 setRevenue({ total, monthly, active, expired });
             };
 
-            const assignSubscription = async (customerId, tierKey) => {
+            const assignSubscription = (customerId, tierKey) => {
                 const tier = SUBSCRIPTION_TIERS[tierKey];
                 const now = new Date();
                 const expiresAt = new Date(now.getTime() + tier.durationDays * 24 * 60 * 60 * 1000);
-                const existing = customers.find(c => c.id === customerId);
-                const newSubscription = {
-                    tier: tierKey,
-                    status: tierKey === 'free' ? 'trial' : 'active',
-                    startedAt: now.toISOString(),
-                    expiresAt: expiresAt.toISOString(),
-                    paymentMethod: 'MANUAL',
-                    autoRenew: false
-                };
-                const newTotalPaid = (existing?.totalPaid || 0) + tier.price;
 
-                await db.collection('companies').doc(customerId).update({
-                    subscription: newSubscription,
-                    totalPaid: newTotalPaid
+                const updated = customers.map(c => {
+                    if (c.id === customerId) {
+                        return {
+                            ...c,
+                            subscription: {
+                                tier: tierKey,
+                                status: tierKey === 'free' ? 'trial' : 'active',
+                                startedAt: now.toISOString(),
+                                expiresAt: expiresAt.toISOString(),
+                                paymentMethod: 'MANUAL',
+                                autoRenew: false
+                            },
+                            totalPaid: (c.totalPaid || 0) + tier.price
+                        };
+                    }
+                    return c;
                 });
 
-                const updated = customers.map(c => c.id === customerId ? { ...c, subscription: newSubscription, totalPaid: newTotalPaid } : c);
                 setCustomers(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
                 calculateRevenue(updated);
                 setShowAssignModal(false);
             };
 
-            const extendSubscription = async (customerId, extraDays) => {
-                const existing = customers.find(c => c.id === customerId);
-                if (!existing?.subscription) return;
-                const currentExpiry = new Date(existing.subscription.expiresAt);
-                const newExpiry = new Date(currentExpiry.getTime() + extraDays * 24 * 60 * 60 * 1000);
-                const newSubscription = { ...existing.subscription, expiresAt: newExpiry.toISOString(), status: 'active' };
-
-                await db.collection('companies').doc(customerId).update({ subscription: newSubscription });
-
-                const updated = customers.map(c => c.id === customerId ? { ...c, subscription: newSubscription } : c);
+            const extendSubscription = (customerId, extraDays) => {
+                const updated = customers.map(c => {
+                    if (c.id === customerId && c.subscription) {
+                        const currentExpiry = new Date(c.subscription.expiresAt);
+                        const newExpiry = new Date(currentExpiry.getTime() + extraDays * 24 * 60 * 60 * 1000);
+                        return {
+                            ...c,
+                            subscription: {
+                                ...c.subscription,
+                                expiresAt: newExpiry.toISOString(),
+                                status: 'active'
+                            }
+                        };
+                    }
+                    return c;
+                });
                 setCustomers(updated);
-                calculateRevenue(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
             };
 
-            const revokeAccess = async (customerId) => {
-                const existing = customers.find(c => c.id === customerId);
-                if (!existing?.subscription) return;
-                const newSubscription = { ...existing.subscription, status: 'suspended' };
-
-                await db.collection('companies').doc(customerId).update({ subscription: newSubscription });
-
-                const updated = customers.map(c => c.id === customerId ? { ...c, subscription: newSubscription } : c);
+            const revokeAccess = (customerId) => {
+                const updated = customers.map(c => {
+                    if (c.id === customerId) {
+                        return { ...c, subscription: { ...c.subscription, status: 'suspended' } };
+                    }
+                    return c;
+                });
                 setCustomers(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
+            };
+
+            const addCustomer = (customerData) => {
+                const newCustomer = {
+                    id: 'CUST-' + Date.now(),
+                    ...customerData,
+                    subscription: {
+                        tier: 'free',
+                        status: 'trial',
+                        startedAt: new Date().toISOString(),
+                        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+                        paymentMethod: 'TRIAL',
+                        autoRenew: false
+                    },
+                    totalPaid: 0
+                };
+                const updated = [...customers, newCustomer];
+                setCustomers(updated);
+                localStorage.setItem('bizbooks_customers_subscriptions', JSON.stringify(updated));
                 calculateRevenue(updated);
             };
 
@@ -2739,10 +2837,7 @@ function checkLimit(userSubscription, limitType, currentCount) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {loading && (
-                                        <tr><td colSpan="6" className="px-4 py-4 text-center text-sm text-gray-400">Loading customers...</td></tr>
-                                    )}
-                                    {!loading && filtered.length === 0 && (
+                                    {filtered.length === 0 && (
                                         <tr><td colSpan="6" className="px-4 py-4 text-center text-sm text-gray-400">No customers yet</td></tr>
                                     )}
                                     {filtered.map(customer => (
