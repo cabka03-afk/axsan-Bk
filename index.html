@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -150,7 +149,8 @@ const MODULE_NAMES = {
 };
 
 // ==================== SUBSCRIPTION HELPERS ====================
-function hasModuleAccess(userSubscription, moduleId) {
+function hasModuleAccess(userSubscription, moduleId, isSuperAdmin) {
+    if (isSuperAdmin) return true;
     if (!userSubscription || !userSubscription.tier) return moduleId === 'dashboard';
     const tier = SUBSCRIPTION_TIERS[userSubscription.tier];
     if (!tier) return moduleId === 'dashboard';
@@ -191,6 +191,63 @@ function checkLimit(userSubscription, limitType, currentCount) {
             const [company, setCompany] = useState(null);
             const [authError, setAuthError] = useState('');
             const [userSubscription, setUserSubscription] = useState(null);
+
+            // ==================== AUTO-CREATE ADMIN ACCOUNT ====================
+            useEffect(() => {
+                const ADMIN_EMAIL = 'cabaasxc@gmail.com';
+                const ADMIN_PASS = 'Qaali@1998';
+                const ADMIN_KEY = 'bizbooks_admin_account';
+
+                // Check if admin account already exists
+                const existingAdmin = OFFLINE_STORAGE.get(ADMIN_KEY);
+                if (!existingAdmin) {
+                    // Create admin company
+                    const adminCompanyId = 'ADMIN_' + Date.now();
+                    const adminCompany = {
+                        id: adminCompanyId,
+                        name: 'BizBooks Admin',
+                        ownerUid: 'admin_uid',
+                        ownerEmail: ADMIN_EMAIL,
+                        plan: 'pro',
+                        status: 'active',
+                        createdAt: new Date().toISOString()
+                    };
+
+                    // Create admin user
+                    const adminUser = {
+                        email: ADMIN_EMAIL,
+                        name: 'Super Admin',
+                        companyId: adminCompanyId,
+                        role: 'owner',
+                        isSuperAdmin: true
+                    };
+
+                    // Save admin account
+                    const adminSession = {
+                        userDoc: adminUser,
+                        company: adminCompany
+                    };
+
+                    OFFLINE_STORAGE.set(ADMIN_KEY, { email: ADMIN_EMAIL, password: ADMIN_PASS, companyId: adminCompanyId });
+                    OFFLINE_STORAGE.set('bizbooks_offline_session', adminSession);
+
+                    // Create admin subscription (Pro tier, never expires)
+                    const adminSub = {
+                        tier: 'pro',
+                        status: 'active',
+                        startedAt: new Date().toISOString(),
+                        expiresAt: '2099-12-31T23:59:59.000Z',
+                        paymentMethod: 'ADMIN',
+                        autoRenew: true
+                    };
+                    OFFLINE_STORAGE.set('bizbooks_subscription_' + adminCompanyId, adminSub);
+
+                    // Create initial business data for admin
+                    OFFLINE_STORAGE.set('bizbooksStateV2_' + adminCompanyId, initialState);
+
+                    console.log('✅ Admin account created: ' + ADMIN_EMAIL);
+                }
+            }, []);
             const [isOffline, setIsOffline] = useState(!isFirebaseAvailable);
 
             useEffect(() => {
@@ -273,6 +330,19 @@ function checkLimit(userSubscription, limitType, currentCount) {
             const login = async (email, password) => {
                 setAuthError('');
                 if (!auth) {
+                    // Check admin credentials
+                    const ADMIN_KEY = 'bizbooks_admin_account';
+                    const adminData = OFFLINE_STORAGE.get(ADMIN_KEY);
+                    if (adminData && adminData.email === email) {
+                        const session = OFFLINE_STORAGE.get('bizbooks_offline_session');
+                        if (session && session.userDoc) {
+                            setUserDoc(session.userDoc);
+                            setCompany(session.company);
+                            setIsOffline(true);
+                            return;
+                        }
+                    }
+                    
                     const offlineSession = OFFLINE_STORAGE.get('bizbooks_offline_session');
                     if (offlineSession && offlineSession.userDoc.email === email) {
                         setUserDoc(offlineSession.userDoc);
@@ -352,7 +422,24 @@ function checkLimit(userSubscription, limitType, currentCount) {
                             <button disabled={submitting} type="submit" className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
                                 {submitting ? 'Please wait...' : mode === 'login' ? 'Log In' : 'Create Account'}
                             </button>
-                        </form>
+                        
+                        <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                            <p className="text-xs text-purple-800 font-medium mb-2">🔐 Manager Access</p>
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    setForm({ ...form, email: 'cabaasxc@gmail.com', password: 'Qaali@1998' });
+                                    setMode('login');
+                                    setTimeout(() => {
+                                        document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+                                    }, 100);
+                                }}
+                                className="w-full py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm"
+                            >
+                                👑 Log In as Admin
+                            </button>
+                        </div>
+</form>
                         
                         <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
                             <p className="text-xs text-yellow-800 font-medium">Admin Access</p>
@@ -1409,10 +1496,10 @@ function checkLimit(userSubscription, limitType, currentCount) {
             ];
 
             // Filter nav items based on subscription
-            const navItems = allNavItems.filter(item => hasModuleAccess(userSubscription, item.id));
+            const navItems = allNavItems.filter(item => hasModuleAccess(userSubscription, item.id, userDoc?.isSuperAdmin));
 
             // Add admin panel if user has access
-            if (userDoc && (userDoc.isSuperAdmin || hasModuleAccess(userSubscription, 'admin'))) {
+            if (userDoc && (userDoc.isSuperAdmin || hasModuleAccess(userSubscription, 'admin', userDoc?.isSuperAdmin))) {
                 navItems.push({ id: 'admin', label: 'Subscriptions', icon: '💎' });
             }
 
@@ -2947,7 +3034,7 @@ function AppContent() {
             const allowedAdmin = activePage === 'admin' && (userDoc?.isSuperAdmin || hasModuleAccess(userSubscription, 'admin'));
 
             // Check if user has access to the requested page
-            const hasAccess = activePage === 'dashboard' || hasModuleAccess(userSubscription, activePage);
+            const hasAccess = activePage === 'dashboard' || hasModuleAccess(userSubscription, activePage, userDoc?.isSuperAdmin);
             const ActivePage = !hasAccess ? () => React.createElement(UpgradePrompt, { requiredModule: activePage, currentTier: userSubscription?.tier }) 
                 : (allowedAdmin ? SubscriptionManager : (pages[activePage] || Dashboard));
 
